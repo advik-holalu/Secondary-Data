@@ -664,157 +664,157 @@ with tab3:
             st.plotly_chart(fig_lbar, use_container_width=True)
 
     # ----------------------------
-# B. DUMBBELL (Q1 avg ● vs Jul–Sep avg ○)
-# ----------------------------
-st.subheader("Benchmark Shift — Q1 Avg ● vs Q2 Avg ○")
+    # B. DUMBBELL (Q1 avg ● vs Jul–Sep avg ○)
+    # ----------------------------
+    st.subheader("Benchmark Shift — Q1 Avg ● vs Q2 Avg ○")
 
-import plotly.graph_objects as go
+    import plotly.graph_objects as go
 
-# Recompute Jul–Sep Avg (instead of Jul–Oct)
-JUL_SEP_SET = {"jul", "aug", "sep"}
+    # Recompute Jul–Sep Avg (instead of Jul–Oct)
+    JUL_SEP_SET = {"jul", "aug", "sep"}
 
-q1_state = (
-    df3[df3["MonthKey"].isin(Q1_SET)]
-    .groupby(["State Name","MonthKey"])[metric_tab3]
-    .sum()
-    .groupby(level=0).mean()
-    .rename("Q1_avg")
-)
-
-js_state = (
-    df3[df3["MonthKey"].isin(JUL_SEP_SET)]
-    .groupby(["State Name","MonthKey"])[metric_tab3]
-    .sum()
-    .groupby(level=0).mean()
-    .rename("JulSep_avg")
-)
-
-# Merge and recalc growth %
-growth_df = pd.concat([q1_state, js_state], axis=1).reset_index().fillna(0.0)
-growth_df["Growth %"] = ((growth_df["JulSep_avg"] - growth_df["Q1_avg"]) /
-                         growth_df["Q1_avg"].replace(0, np.nan) * 100)
-
-# Same top growth + laggards selection logic
-growth_only = growth_df[growth_df["Growth %"] > 0].sort_values("Growth %", ascending=False)
-laggard_only = growth_df[growth_df["Growth %"] < 0].sort_values("Growth %", ascending=True)
-
-top5_growth = growth_only.head(5)
-top_laggards = laggard_only.head(5)
-
-# Combine for chart
-shown_states = pd.concat([top5_growth, top_laggards], ignore_index=True)
-if shown_states.empty:
-    st.info("No states to display for benchmark comparison.")
-else:
-    shown_states = shown_states.sort_values("Growth %", ascending=False)
-
-    y_states = shown_states["State Name"].tolist()
-    q1_vals = shown_states["Q1_avg"].tolist()
-    js_vals = shown_states["JulSep_avg"].tolist()
-
-    fig_dumb = go.Figure()
-
-    # Connecting lines
-    for i, state in enumerate(y_states):
-        fig_dumb.add_trace(go.Scatter(
-            x=[q1_vals[i], js_vals[i]],
-            y=[state, state],
-            mode="lines",
-            line=dict(color="#9e9e9e", width=2),
-            showlegend=False,
-            hoverinfo="skip"
-        ))
-
-    # Q1 points
-    fig_dumb.add_trace(go.Scatter(
-        x=q1_vals,
-        y=y_states,
-        mode="markers",
-        name="Q1 Avg",
-        marker=dict(size=10, symbol="circle", color="#616161"),
-        hovertemplate="State=%{y}<br>Q1 Avg="+metric_tab3+"=%{x:.0f}<extra></extra>"
-    ))
-
-    # Jul–Sep points
-    fig_dumb.add_trace(go.Scatter(
-        x=js_vals,
-        y=y_states,
-        mode="markers",
-        name="Jul–Sep Avg",
-        marker=dict(size=10, symbol="circle-open", color="#9575cd"),
-        hovertemplate="State=%{y}<br>Jul–Sep Avg="+metric_tab3+"=%{x:.0f}<extra></extra>"
-    ))
-
-    # Apply Indian number formatting to axis ticks
-    xmax = max(js_vals + q1_vals) if (js_vals or q1_vals) else 0.0
-    tvals, ttext = indian_ticktexts(xmax)
-
-    fig_dumb.update_layout(
-        height=520,
-        margin=dict(l=10, r=10, t=30, b=10),
-        xaxis=dict(title=metric_tab3, tickmode="array", tickvals=tvals, ticktext=ttext),
-        yaxis=dict(title=""),
-        legend_title_text=""
+    q1_state = (
+        df3[df3["MonthKey"].isin(Q1_SET)]
+        .groupby(["State Name","MonthKey"])[metric_tab3]
+        .sum()
+        .groupby(level=0).mean()
+        .rename("Q1_avg")
     )
 
-    st.plotly_chart(fig_dumb, use_container_width=True)
+    js_state = (
+        df3[df3["MonthKey"].isin(JUL_SEP_SET)]
+        .groupby(["State Name","MonthKey"])[metric_tab3]
+        .sum()
+        .groupby(level=0).mean()
+        .rename("JulSep_avg")
+    )
 
-    # ----------------------------
-    # C. DRILL-DOWN — Monthly Trend for Selected State (Jul→Oct)
-    # ----------------------------
-    if not top5_growth.empty:
-        default_state = top5_growth.iloc[0]["State Name"]
-    elif not shown_states.empty:
-        default_state = shown_states.iloc[0]["State Name"]
+    # Merge and recalc growth %
+    growth_df = pd.concat([q1_state, js_state], axis=1).reset_index().fillna(0.0)
+    growth_df["Growth %"] = ((growth_df["JulSep_avg"] - growth_df["Q1_avg"]) /
+                            growth_df["Q1_avg"].replace(0, np.nan) * 100)
+
+    # Same top growth + laggards selection logic
+    growth_only = growth_df[growth_df["Growth %"] > 0].sort_values("Growth %", ascending=False)
+    laggard_only = growth_df[growth_df["Growth %"] < 0].sort_values("Growth %", ascending=True)
+
+    top5_growth = growth_only.head(5)
+    top_laggards = laggard_only.head(5)
+
+    # Combine for chart
+    shown_states = pd.concat([top5_growth, top_laggards], ignore_index=True)
+    if shown_states.empty:
+        st.info("No states to display for benchmark comparison.")
     else:
-        default_state = None
+        shown_states = shown_states.sort_values("Growth %", ascending=False)
 
-    if default_state is None:
-        st.info("No state available for drill-down trend.")
-    else:
-        st.subheader("Drill-down: Monthly Trend (Jul→Oct)")
-        state_choice = st.selectbox(
-            "Pick a state",
-            options=sorted(df3["State Name"].dropna().unique().tolist()),
-            index=sorted(df3["State Name"].dropna().unique().tolist()).index(default_state)
-            if default_state in df3["State Name"].values else 0
+        y_states = shown_states["State Name"].tolist()
+        q1_vals = shown_states["Q1_avg"].tolist()
+        js_vals = shown_states["JulSep_avg"].tolist()
+
+        fig_dumb = go.Figure()
+
+        # Connecting lines
+        for i, state in enumerate(y_states):
+            fig_dumb.add_trace(go.Scatter(
+                x=[q1_vals[i], js_vals[i]],
+                y=[state, state],
+                mode="lines",
+                line=dict(color="#9e9e9e", width=2),
+                showlegend=False,
+                hoverinfo="skip"
+            ))
+
+        # Q1 points
+        fig_dumb.add_trace(go.Scatter(
+            x=q1_vals,
+            y=y_states,
+            mode="markers",
+            name="Q1 Avg",
+            marker=dict(size=10, symbol="circle", color="#616161"),
+            hovertemplate="State=%{y}<br>Q1 Avg="+metric_tab3+"=%{x:.0f}<extra></extra>"
+        ))
+
+        # Jul–Sep points
+        fig_dumb.add_trace(go.Scatter(
+            x=js_vals,
+            y=y_states,
+            mode="markers",
+            name="Jul–Sep Avg",
+            marker=dict(size=10, symbol="circle-open", color="#9575cd"),
+            hovertemplate="State=%{y}<br>Jul–Sep Avg="+metric_tab3+"=%{x:.0f}<extra></extra>"
+        ))
+
+        # Apply Indian number formatting to axis ticks
+        xmax = max(js_vals + q1_vals) if (js_vals or q1_vals) else 0.0
+        tvals, ttext = indian_ticktexts(xmax)
+
+        fig_dumb.update_layout(
+            height=520,
+            margin=dict(l=10, r=10, t=30, b=10),
+            xaxis=dict(title=metric_tab3, tickmode="array", tickvals=tvals, ticktext=ttext),
+            yaxis=dict(title=""),
+            legend_title_text=""
         )
 
-        # Monthly series for chosen state (Jul–Oct)
-        s_df = df3[(df3["State Name"] == state_choice) & (df3["MonthKey"].isin(JUL_OCT_SET))].copy()
-        s_line = (
-            s_df.groupby(["MonthNum","MonthLabel"], as_index=False)[metric_tab3]
-            .sum()
-            .sort_values("MonthNum")
-        )
-        s_line["MonthLabel"] = pd.Categorical(s_line["MonthLabel"], month_order_jo, ordered=True)
+        st.plotly_chart(fig_dumb, use_container_width=True)
 
-        fig_trend = px.line(
-            s_line,
-            x="MonthLabel",
-            y=metric_tab3,
-            markers=True
-        )
-        # Add the state's Q1 average as benchmark hline
-        s_q1 = growth_df.set_index("State Name").get("Q1_avg")
-        s_q1_val = float(s_q1.get(state_choice, np.nan)) if s_q1 is not None else np.nan
-        if not np.isnan(s_q1_val):
-            fig_trend.add_hline(
-                y=s_q1_val,
-                line_dash="dot",
-                line_color="#9e9e9e",
-                annotation_text=f"Q1 Avg: {format_indian(s_q1_val)}",
-                annotation_position="top left",
-                annotation_font=dict(size=11, color="#616161")
+        # ----------------------------
+        # C. DRILL-DOWN — Monthly Trend for Selected State (Jul→Oct)
+        # ----------------------------
+        if not top5_growth.empty:
+            default_state = top5_growth.iloc[0]["State Name"]
+        elif not shown_states.empty:
+            default_state = shown_states.iloc[0]["State Name"]
+        else:
+            default_state = None
+
+        if default_state is None:
+            st.info("No state available for drill-down trend.")
+        else:
+            st.subheader("Drill-down: Monthly Trend (Jul→Oct)")
+            state_choice = st.selectbox(
+                "Pick a state",
+                options=sorted(df3["State Name"].dropna().unique().tolist()),
+                index=sorted(df3["State Name"].dropna().unique().tolist()).index(default_state)
+                if default_state in df3["State Name"].values else 0
             )
 
-        ymax_tr = float(s_line[metric_tab3].max()) if not s_line.empty else 0.0
-        tv_tr, tt_tr = indian_ticktexts(ymax_tr)
-        fig_trend.update_layout(
-            yaxis=dict(tickmode="array", tickvals=tv_tr, ticktext=tt_tr, title=metric_tab3),
-            xaxis_title="Month",
-            height=420,
-            margin=dict(l=10, r=10, t=40, b=10)
-        )
-        fig_trend.update_traces(hovertemplate="Month=%{x}<br>"+metric_tab3+"=%{y:.0f}<extra></extra>")
-        st.plotly_chart(fig_trend, use_container_width=True)
+            # Monthly series for chosen state (Jul–Oct)
+            s_df = df3[(df3["State Name"] == state_choice) & (df3["MonthKey"].isin(JUL_OCT_SET))].copy()
+            s_line = (
+                s_df.groupby(["MonthNum","MonthLabel"], as_index=False)[metric_tab3]
+                .sum()
+                .sort_values("MonthNum")
+            )
+            s_line["MonthLabel"] = pd.Categorical(s_line["MonthLabel"], month_order_jo, ordered=True)
+
+            fig_trend = px.line(
+                s_line,
+                x="MonthLabel",
+                y=metric_tab3,
+                markers=True
+            )
+            # Add the state's Q1 average as benchmark hline
+            s_q1 = growth_df.set_index("State Name").get("Q1_avg")
+            s_q1_val = float(s_q1.get(state_choice, np.nan)) if s_q1 is not None else np.nan
+            if not np.isnan(s_q1_val):
+                fig_trend.add_hline(
+                    y=s_q1_val,
+                    line_dash="dot",
+                    line_color="#9e9e9e",
+                    annotation_text=f"Q1 Avg: {format_indian(s_q1_val)}",
+                    annotation_position="top left",
+                    annotation_font=dict(size=11, color="#616161")
+                )
+
+            ymax_tr = float(s_line[metric_tab3].max()) if not s_line.empty else 0.0
+            tv_tr, tt_tr = indian_ticktexts(ymax_tr)
+            fig_trend.update_layout(
+                yaxis=dict(tickmode="array", tickvals=tv_tr, ticktext=tt_tr, title=metric_tab3),
+                xaxis_title="Month",
+                height=420,
+                margin=dict(l=10, r=10, t=40, b=10)
+            )
+            fig_trend.update_traces(hovertemplate="Month=%{x}<br>"+metric_tab3+"=%{y:.0f}<extra></extra>")
+            st.plotly_chart(fig_trend, use_container_width=True)
