@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots  
 
 # ------------------------------------------------------------
 # PAGE CONFIG — must be the very first Streamlit command
@@ -14,9 +15,11 @@ st.set_page_config(page_title="Secondary Sales Dashboard", layout="wide")
 # ------------------------------------------------------------
 @st.cache_data(show_spinner=True)
 def load_data():
+    # Load both parquet files
     df = pd.read_parquet("secondary_sales.parquet")
+    df_ind = pd.read_parquet("industry_size.parquet")
 
-    # Standardize types
+    # Standardize main sales dataframe
     df["Month"] = df["Month"].astype(str)
     df["Year"] = df["Year"].astype(int)
     df["Primary Cat"] = df["Primary Cat"].astype(str)
@@ -37,23 +40,28 @@ def load_data():
         "november": 11, "nov": 11,
         "december": 12, "dec": 12
     }
+
+    # Normalize month
     df["MonthKey"] = df["Month"].str[:3].str.lower()
     df["MonthNum"] = df["Month"].str.lower().map(month_map).astype(int)
 
-    # Universal rule: ignore Jan–Mar and November across the app
-    valid_months = [4,5,6,7,8,9,10]  # Apr..Oct
+    # Only keep Apr → Oct
+    valid_months = [4, 5, 6, 7, 8, 9, 10]
     df = df[df["MonthNum"].isin(valid_months)].copy()
 
-    # Nice month label for x-axis
-    mlabel = {4:"Apr",5:"May",6:"Jun",7:"Jul",8:"Aug",9:"Sep",10:"Oct"}
+    # Month label for charts
+    mlabel = {4: "Apr", 5: "May", 6: "Jun", 7: "Jul",
+              8: "Aug", 9: "Sep", 10: "Oct"}
     df["MonthLabel"] = df["MonthNum"].map(mlabel)
 
-    return df
+    return df, df_ind
 
+
+# Try loading both datasets
 try:
-    df = load_data()
+    df, df_ind = load_data()
 except FileNotFoundError:
-    st.error("Missing 'secondary_sales.parquet'. Run merge_to_parquet.py first.")
+    st.error("Missing parquet file(s). Ensure both secondary_sales.parquet and industry_size.parquet are present.")
     st.stop()
 
 # ------------------------------------------------------------
@@ -108,10 +116,11 @@ def compute_q1_benchmark(df, metric):
 # ------------------------------------------------------------
 # DEFINE TABS
 # ------------------------------------------------------------
-tab1, tab2, tab3 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "Sales Overview",
     "Top Markets",
-    "Growth vs Laggard Markets"
+    "Growth vs Laggard Markets",
+    "Metro Industry View"
 ])
 
 # ============================================================
@@ -818,3 +827,145 @@ with tab3:
             )
             fig_trend.update_traces(hovertemplate="Month=%{x}<br>"+metric_tab3+"=%{y:.0f}<extra></extra>")
             st.plotly_chart(fig_trend, use_container_width=True)
+
+# ============================================================
+# TAB 4 — METRO INDUSTRY VIEW (Grouped Bar: Industry vs GO DESi)
+# ============================================================
+with tab4:
+    st.title("Metro Industry View — GO DESi vs Industry Size")
+
+    # ----------------------------
+    # TAB 4 FILTERS
+    # ----------------------------
+    with st.sidebar:
+        st.header("Tab 4 Filters")
+
+        cat4 = st.multiselect(
+            "Primary Category (Tab 4)",
+            sorted(df["Primary Cat"].dropna().unique().tolist()),
+            default=[],
+            key="cat_tab4"
+        )
+
+        plat4 = st.multiselect(
+            "Platform (Tab 4)",
+            sorted(df["Platform"].dropna().unique().tolist()),
+            default=[],
+            key="plat_tab4"
+        )
+
+        metro_cities = ["Bengaluru", "Mumbai", "Kolkata", "Delhi"]
+        city4 = st.multiselect(
+            "City (Tab 4)",
+            metro_cities,
+            default=["Bengaluru"],
+            key="city_tab4"
+        )
+
+    # ----------------------------
+    # APPLY FILTERS
+    # ----------------------------
+    df_rev = df.copy()
+    df_ind4 = df_ind.copy()
+
+    if cat4:
+        df_rev = df_rev[df_rev["Primary Cat"].isin(cat4)]
+        df_ind4 = df_ind4[df_ind4["Primary Cat"].isin(cat4)]
+
+    if plat4:
+        df_rev = df_rev[df_rev["Platform"].isin(plat4)]
+        df_ind4 = df_ind4[df_ind4["Platform"].isin(plat4)]
+
+    if city4:
+        df_rev = df_rev[df_rev["City Name"].isin(city4)]
+        df_ind4 = df_ind4[df_ind4["City Name"].isin(city4)]
+
+    if df_ind4.empty:
+        st.warning("No industry size data available for these filters.")
+        st.stop()
+
+    # ----------------------------
+    # PREPARE MONTH-WISE DATA
+    # ----------------------------
+    month_order = ["Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"]
+
+    # Industry
+    ind = (
+        df_ind4.groupby("MonthLabel", as_index=False)["Industry Size"]
+        .sum()
+    )
+    ind["MonthLabel"] = pd.Categorical(ind["MonthLabel"], month_order, ordered=True)
+    ind = ind.sort_values("MonthLabel")
+
+    # Revenue
+    rev = (
+        df_rev.groupby("MonthLabel", as_index=False)["Revenue"]
+        .sum()
+    )
+    rev["MonthLabel"] = pd.Categorical(rev["MonthLabel"], month_order, ordered=True)
+    rev = rev.sort_values("MonthLabel")
+
+    # Merge for table
+    merged = pd.merge(ind, rev, on="MonthLabel", how="outer")
+
+    # Only fill NA for numeric columns (not MonthLabel categorical)
+    merged["Industry Size"] = merged["Industry Size"].fillna(0)
+    merged["Revenue"] = merged["Revenue"].fillna(0)
+
+    merged["Share %"] = (
+        merged["Revenue"] / merged["Industry Size"].replace(0, float("nan")) * 100
+    ).fillna(0).round(2)
+
+    # ----------------------------
+    # GROUPED BAR CHART
+    # ----------------------------
+    st.subheader("Industry Size vs GO DESi Revenue (Grouped Bars) — Apr to Oct")
+
+    fig = go.Figure()
+
+    # Industry Bars
+    fig.add_trace(go.Bar(
+        x=ind["MonthLabel"],
+        y=ind["Industry Size"],
+        name="Industry Size",
+        marker_color="#4A90E2",
+        hovertemplate="Industry Size: %{y:,.0f}<extra></extra>"
+    ))
+
+    # Revenue Bars
+    fig.add_trace(go.Bar(
+        x=rev["MonthLabel"],
+        y=rev["Revenue"],
+        name="GO DESi Revenue",
+        marker_color="#FF8C00",
+        hovertemplate="GO DESi Revenue: %{y:,.0f}<extra></extra>"
+    ))
+
+    fig.update_layout(
+        barmode="group",       # <-- GROUPED SIDE-BY-SIDE
+        height=520,
+        margin=dict(l=10, r=10, t=60, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.25),
+        title=dict(
+            text="Industry Size (₹) vs GO DESi Revenue (₹) — Grouped Bars",
+            x=0.01,
+            y=0.93
+        ),
+        yaxis=dict(
+            title="₹ (Raw Values)",
+            tickformat=",",
+        )
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ----------------------------
+    # SHARE TABLE
+    # ----------------------------
+    st.subheader("GO DESi Share of Industry (%)")
+
+    st.dataframe(
+        merged[["MonthLabel", "Industry Size", "Revenue", "Share %"]]
+            .rename(columns={"MonthLabel": "Month"}),
+        use_container_width=True
+    )
