@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots  
+from plotly.subplots import make_subplots
 
 # ------------------------------------------------------------
 # PAGE CONFIG — must be the very first Streamlit command
@@ -64,6 +64,19 @@ except FileNotFoundError:
     st.error("Missing parquet file(s). Ensure both secondary_sales.parquet and industry_size.parquet are present.")
     st.stop()
 
+# ---------------------------------
+# LOAD P TYPE DATA (excel sheet)
+# ---------------------------------
+@st.cache_data
+def load_ptype_data():
+    # change file name if needed
+    return pd.read_excel("BusinessOverview.xlsx", sheet_name="P Type")
+
+pt_df = load_ptype_data()
+
+# Clean up column names just in case
+pt_df.columns = pt_df.columns.str.strip()
+
 # ------------------------------------------------------------
 # INDIAN NUMBER FORMATTING
 # ------------------------------------------------------------
@@ -114,26 +127,162 @@ def compute_q1_benchmark(df, metric):
     return monthly[metric].mean()
 
 # ------------------------------------------------------------
+# TAB 5 — P TYPE SECTION RENDERER
+# ------------------------------------------------------------
+
+def render_ptype_section(pt_df, ptype, selected_platforms, selected_cities, key_suffix=""):
+    """
+    Renders:
+      - Variant multiselect
+      - Dual-axis line chart (GO DESI share % vs Industry Abs Size in crores)
+      - GO DESI = dotted line
+      - Industry Size = solid line
+      - Indian numbering format (crores)
+    """
+
+    subset = pt_df.copy()
+
+    # Apply global filters
+    if selected_platforms:
+        subset = subset[subset["Platform"].isin(selected_platforms)]
+
+    if selected_cities:
+        subset = subset[subset["City"].isin(selected_cities)]
+
+    # Filter by P Type
+    subset = subset[subset["P Type"] == ptype]
+
+    if subset.empty:
+        st.info(f"No data for {ptype} with current filters.")
+        return
+
+    # Local Variant filter
+    variants = sorted(subset["Variant"].dropna().unique().tolist())
+    variant_key = f"variants_{ptype}_{key_suffix}"
+
+    if variants:
+        selected_variants = st.multiselect(
+            f"Variants for {ptype}",
+            options=variants,
+            default=variants,
+            key=variant_key,
+        )
+        if selected_variants:
+            subset = subset[subset["Variant"].isin(selected_variants)]
+
+    if subset.empty:
+        st.info(f"No data for {ptype} after variant filter.")
+        return
+
+    # Ensure Date is datetime
+    subset["Date"] = pd.to_datetime(subset["Date"])
+    subset["MonthNum"] = subset["Date"].dt.month
+    subset["MonthLabel"] = subset["Date"].dt.strftime("%b")
+
+    # Industry Absolute Size (solid line)
+    industry = subset.groupby("MonthNum")["Absolute size"].sum()
+
+    # GO DESI rows only
+    godesi_mask = subset["Brand"].astype(str).str.strip().str.upper() == "GO DESI"
+    godesi = subset[godesi_mask].groupby("MonthNum")["Absolute size"].sum()
+
+    if industry.empty:
+        st.info(f"No monthly data for {ptype}.")
+        return
+
+    # Align months
+    months = sorted(industry.index.tolist())
+    industry = industry.reindex(months)
+    godesi = godesi.reindex(months, fill_value=0.0)
+
+    month_labels = (
+        subset.groupby("MonthNum")["MonthLabel"]
+        .first()
+        .reindex(months)
+        .tolist()
+    )
+
+    # Convert absolute size to CRORES
+    industry_crore = industry.values.astype(float) / 1e7
+    godesi_crore = godesi.values.astype(float) / 1e7
+
+    # GO DESI share % 
+    share_pct = np.where(
+        industry.values > 0,
+        (godesi.values / industry.values) * 100.0,
+        np.nan,
+    )
+
+    # -----------------------------
+    # Build dual-axis Plotly chart
+    # -----------------------------
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    # 🟦 Blue dotted line = GO DESI share %
+    fig.add_trace(
+        go.Scatter(
+            x=month_labels,
+            y=share_pct,
+            name="GO DESI Share (%)",
+            mode="lines+markers",
+            line=dict(dash="dot")
+        ),
+        secondary_y=False,
+    )
+
+    # 🔴 Red solid line = Industry Absolute Size (₹, in crores)
+    fig.add_trace(
+        go.Scatter(
+            x=month_labels,
+            y=industry_crore,
+            name="Industry Absolute Size (₹ crore)",
+            mode="lines+markers",
+            line=dict(dash="solid")
+        ),
+        secondary_y=True,
+    )
+
+    # Layout
+    fig.update_layout(
+        margin=dict(l=20, r=20, t=40, b=20),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+        ),
+    )
+
+    # Axis labels
+    fig.update_xaxes(title_text="Month")
+    fig.update_yaxes(title_text="GO DESI Share (%)", secondary_y=False)
+    fig.update_yaxes(title_text="Industry Size (₹ crore)", secondary_y=True)
+
+    st.plotly_chart(fig, use_container_width=True)
+
+# ------------------------------------------------------------
 # DEFINE TABS
 # ------------------------------------------------------------
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "Sales Overview",
     "Top Markets",
     "Growth vs Laggard Markets",
-    "Metro Industry View"
+    "Metro Industry View",
+    "Product type / Variant Deep Dive"
 ])
 
 # ============================================================
 # TAB 1 – OVERVIEW DASHBOARD
 # ============================================================
 with tab1:
-    st.title("Secondary Sales — Overview (Tab 1)")
+    st.title("Secondary Sales Overview")
 
     # ------------------------------------------------------------
     # Filters (left sidebar)
     # ------------------------------------------------------------
     with st.sidebar:
-        st.header("Tab 1 Filters")
+        st.header("Sales Overview Filters")
         metric = st.radio("Metric", ["Revenue", "GMV"], index=0, key="metric_tab1")
         all_regions = sorted(df["Region Name"].dropna().unique().tolist())
         region_sel = st.multiselect("Region", options=all_regions, default=[])
@@ -415,13 +564,13 @@ with tab1:
 # TAB 2 — PRIMARY MARKETS (Top 70% State Trends)
 # ============================================================
 with tab2:
-    st.title("Top Markets — State Trends (Top 70%)")
+    st.title("Top Markets - State Trends (Top 70% Contribution)")
 
     # ----------------------------
     # TAB 2 FILTERS (LEFT SIDEBAR)
     # ----------------------------
     with st.sidebar:
-        st.header("Tab 2 Filters")
+        st.header("Top Markets Filter")
 
         metric_tab2 = st.radio("Metric (Tab 2)", ["Revenue", "GMV"], index=0, key="metric_tab2_sidebar")
 
@@ -474,6 +623,56 @@ with tab2:
     top_q1 = get_top_states(q1, metric_tab2)
     top_q2 = get_top_states(q2, metric_tab2)
     top_oct = get_top_states(oct_df, metric_tab2)
+
+    # ============================================================
+    # OVERALL TREND (Apr–Oct) — Based Only on Top 70% Q1 States
+    # ============================================================
+    st.subheader("Overall State Trend (Apr–Oct) — Based on Q1 Top 70% States")
+
+    # Step 1: Identify Top 70% States *using only Q1 data*
+    q1_only = df2[df2["MonthKey"].isin(Q1_KEYS)].copy()
+    top_q1_states = get_top_states(q1_only, metric_tab2)
+
+    # Step 2: Filter entire Apr–Oct dataset to only these Q1-top states
+    full_df_q1_based = df2[df2["State Name"].isin(top_q1_states)].copy()
+
+    # Month order Apr→Oct
+    month_order_full = ["Apr","May","Jun","Jul","Aug","Sep","Oct"]
+
+    # Step 3: Build timeline Apr→Oct
+    full_timeline_q1 = (
+        full_df_q1_based.groupby(["State Name","MonthNum","MonthLabel"], as_index=False)[metric_tab2]
+        .sum()
+        .sort_values("MonthNum")
+    )
+
+    # Apply correct month label ordering
+    full_timeline_q1["MonthLabel"] = pd.Categorical(
+        full_timeline_q1["MonthLabel"],
+        month_order_full,
+        ordered=True
+    )
+
+    # Step 4: Plot
+    fig_full_q1 = px.line(
+        full_timeline_q1,
+        x="MonthLabel",
+        y=metric_tab2,
+        color="State Name",
+        markers=True
+    )
+
+    # Add Indian formatting
+    ymax_full_q1 = full_timeline_q1[metric_tab2].max()
+    tv_full_q1, tt_full_q1 = indian_ticktexts(ymax_full_q1)
+    fig_full_q1.update_layout(
+        yaxis=dict(tickmode="array", tickvals=tv_full_q1, ticktext=tt_full_q1),
+        height=420,
+        margin=dict(l=10, r=10, t=40, b=10)
+    )
+
+    st.plotly_chart(fig_full_q1, use_container_width=True)
+
 
     # ============================================================
     # Q1 CHART (Apr–Jun)
@@ -553,16 +752,16 @@ with tab2:
     st.plotly_chart(fig_oct, use_container_width=True)
 
 # ============================================================
-# TAB 3 — GROWTH vs LAGGARD MARKETS (Q1 Benchmark)
+# TAB 3 — GROWTH vs LAGGARD MARKETS (TOP 70% STATES ONLY)
 # ============================================================
 with tab3:
-    st.title("Growth vs Laggard Markets (Q1 Benchmark)")
+    st.title("Growth vs Laggard Markets (Top 70% Contribution Only)")
 
     # ----------------------------
     # TAB 3 FILTERS (LEFT SIDEBAR)
     # ----------------------------
     with st.sidebar:
-        st.header("Tab 3 Filters")
+        st.header("Growth and Laggard Markets Filter")
         metric_tab3 = st.radio("Metric (Tab 3)", ["Revenue", "GMV"], index=0, key="metric_tab3_sidebar")
         cat_tab3 = st.multiselect(
             "Primary Category (Tab 3)",
@@ -577,55 +776,84 @@ with tab3:
             key="platform_tab3_sidebar"
         )
 
-    # Filtered dataset for Tab 3 (we intentionally do NOT filter Regions/States here)
+    # Apply filters (no region/state filters here)
     df3 = apply_filters(df, regions=[], states=[], categories=cat_tab3, platforms=platform_tab3)
     if df3.empty:
         st.warning("No data available for selected Tab 3 filters.")
         st.stop()
 
-    # Periods
+    # -----------------------------------------------------------
+    # STEP 1 — IDENTIFY TOP 70% STATES (using full-period totals)
+    # -----------------------------------------------------------
+    state_totals = (
+        df3.groupby("State Name")[metric_tab3]
+        .sum()
+        .reset_index()
+        .sort_values(metric_tab3, ascending=False)
+    )
+
+    state_totals["CumSum"] = state_totals[metric_tab3].cumsum()
+    total_sum = state_totals[metric_tab3].sum()
+    state_totals["CumPct"] = state_totals["CumSum"] / total_sum
+
+    # Top 70% states only
+    top70_states = state_totals[state_totals["CumPct"] <= 0.70]["State Name"].tolist()
+
+    # Filter dataset to only these states
+    df3 = df3[df3["State Name"].isin(top70_states)]
+
+    if df3.empty:
+        st.warning("No data after applying top 70% state logic.")
+        st.stop()
+
+    # -----------------------------------------------------------
+    # STEP 2 — Q1 AVG vs Q2 AVG (GROWTH CALC)
+    # -----------------------------------------------------------
     Q1_SET = {"apr","may","jun"}
     JUL_OCT_SET = {"jul","aug","sep","oct"}
-    month_order_jo = ["Jul","Aug","Sep","Oct"]
 
-    # --- Monthly averages per state ---
-    # Q1 average (per state)
+    # Q1 avg per state
     q1_state = (
         df3[df3["MonthKey"].isin(Q1_SET)]
         .groupby(["State Name","MonthKey"])[metric_tab3]
         .sum()
-        .groupby(level=0).mean()   # average across 3 months
+        .groupby(level=0)
+        .mean()
         .rename("Q1_avg")
     )
-    # Jul–Oct average (per state)
+
+    # Jul–Oct avg per state
     jo_state = (
         df3[df3["MonthKey"].isin(JUL_OCT_SET)]
         .groupby(["State Name","MonthKey"])[metric_tab3]
         .sum()
-        .groupby(level=0).mean()   # average across 4 months
+        .groupby(level=0)
+        .mean()
         .rename("JulOct_avg")
     )
 
-    # Merge & growth %
+    # Merge & growth calculation
     growth_df = pd.concat([q1_state, jo_state], axis=1).reset_index().fillna(0.0)
     growth_df["Growth %"] = ((growth_df["JulOct_avg"] - growth_df["Q1_avg"]) /
                              growth_df["Q1_avg"].replace(0, np.nan) * 100)
 
-    # Split into growth & laggard sets (limit to top/bottom 5, but allow fewer laggards)
+    # -----------------------------------------------------------
+    # STEP 3 — SPLIT INTO TOP GROWTH & TOP LAGGARD (ONLY INSIDE TOP 70% STATES)
+    # -----------------------------------------------------------
     growth_only = growth_df[growth_df["Growth %"] > 0].sort_values("Growth %", ascending=False)
     laggard_only = growth_df[growth_df["Growth %"] < 0].sort_values("Growth %", ascending=True)
 
     top5_growth = growth_only.head(5)
-    top_laggards = laggard_only.head(5)   # may have < 5 rows; that's fine
+    top_laggards = laggard_only.head(5)
 
     # ----------------------------
-    # A. Δ Growth % BAR CHARTS (style C)
+    # A. Δ GROWTH % BAR CHARTS
     # ----------------------------
     c1, c2 = st.columns(2)
     with c1:
         st.subheader("Top Growth Markets — Q1 vs Q2 (in %)")
         if top5_growth.empty:
-            st.info("No growth markets for the selected filters.")
+            st.info("No growth markets for selected filters.")
         else:
             gbar = top5_growth.copy()
             gbar["Label"] = gbar["Growth %"].map(lambda x: f"{x:.1f}%")
@@ -635,7 +863,7 @@ with tab3:
                 y="State Name",
                 orientation="h",
                 text="Label",
-                color_discrete_sequence=["#2e7d32"]  # green
+                color_discrete_sequence=["#2e7d32"]
             )
             fig_gbar.update_traces(textposition="outside")
             fig_gbar.update_layout(
@@ -650,7 +878,7 @@ with tab3:
     with c2:
         st.subheader("Top Laggard Markets — Q1 vs Q2 (in %)")
         if top_laggards.empty:
-            st.info("No laggard markets — fewer than 1 state dipped vs Q1.")
+            st.info("No laggard markets for selected filters.")
         else:
             lbar = top_laggards.copy()
             lbar["Label"] = lbar["Growth %"].map(lambda x: f"{x:.1f}%")
@@ -660,7 +888,7 @@ with tab3:
                 y="State Name",
                 orientation="h",
                 text="Label",
-                color_discrete_sequence=["#c62828"]  # red
+                color_discrete_sequence=["#c62828"]
             )
             fig_lbar.update_traces(textposition="outside")
             fig_lbar.update_layout(
@@ -673,50 +901,43 @@ with tab3:
             st.plotly_chart(fig_lbar, use_container_width=True)
 
     # ----------------------------
-    # B. DUMBBELL (Q1 avg ● vs Jul–Sep avg ○)
+    # B. DUMBBELL CHART — Q1 ● vs Q2 ○
     # ----------------------------
     st.subheader("Benchmark Shift — Q1 Avg ● vs Q2 Avg ○")
 
-    import plotly.graph_objects as go
+    JUL_SEP_SET = {"jul","aug","sep"}
 
-    # Recompute Jul–Sep Avg (instead of Jul–Oct)
-    JUL_SEP_SET = {"jul", "aug", "sep"}
-
+    # Recompute Q1 vs Jul–Sep avg
     q1_state = (
         df3[df3["MonthKey"].isin(Q1_SET)]
         .groupby(["State Name","MonthKey"])[metric_tab3]
         .sum()
-        .groupby(level=0).mean()
-        .rename("Q1_avg")
+        .groupby(level=0).mean().rename("Q1_avg")
     )
 
     js_state = (
         df3[df3["MonthKey"].isin(JUL_SEP_SET)]
         .groupby(["State Name","MonthKey"])[metric_tab3]
         .sum()
-        .groupby(level=0).mean()
-        .rename("JulSep_avg")
+        .groupby(level=0).mean().rename("JulSep_avg")
     )
 
-    # Merge and recalc growth %
     growth_df = pd.concat([q1_state, js_state], axis=1).reset_index().fillna(0.0)
     growth_df["Growth %"] = ((growth_df["JulSep_avg"] - growth_df["Q1_avg"]) /
-                            growth_df["Q1_avg"].replace(0, np.nan) * 100)
+                             growth_df["Q1_avg"].replace(0, np.nan) * 100)
 
-    # Same top growth + laggards selection logic
     growth_only = growth_df[growth_df["Growth %"] > 0].sort_values("Growth %", ascending=False)
     laggard_only = growth_df[growth_df["Growth %"] < 0].sort_values("Growth %", ascending=True)
 
     top5_growth = growth_only.head(5)
     top_laggards = laggard_only.head(5)
 
-    # Combine for chart
-    shown_states = pd.concat([top5_growth, top_laggards], ignore_index=True)
-    if shown_states.empty:
-        st.info("No states to display for benchmark comparison.")
-    else:
-        shown_states = shown_states.sort_values("Growth %", ascending=False)
+    shown_states = pd.concat([top5_growth, top_laggards])
+    shown_states = shown_states.sort_values("Growth %", ascending=False)
 
+    if shown_states.empty:
+        st.info("No states to display.")
+    else:
         y_states = shown_states["State Name"].tolist()
         q1_vals = shown_states["Q1_avg"].tolist()
         js_vals = shown_states["JulSep_avg"].tolist()
@@ -740,8 +961,7 @@ with tab3:
             y=y_states,
             mode="markers",
             name="Q1 Avg",
-            marker=dict(size=10, symbol="circle", color="#616161"),
-            hovertemplate="State=%{y}<br>Q1 Avg="+metric_tab3+"=%{x:.0f}<extra></extra>"
+            marker=dict(size=10, color="#616161")
         ))
 
         # Jul–Sep points
@@ -750,83 +970,139 @@ with tab3:
             y=y_states,
             mode="markers",
             name="Jul–Sep Avg",
-            marker=dict(size=10, symbol="circle-open", color="#9575cd"),
-            hovertemplate="State=%{y}<br>Jul–Sep Avg="+metric_tab3+"=%{x:.0f}<extra></extra>"
+            marker=dict(size=10, symbol="circle-open", color="#9575cd")
         ))
 
-        # Apply Indian number formatting to axis ticks
-        xmax = max(js_vals + q1_vals) if (js_vals or q1_vals) else 0.0
+        # Formatting
+        xmax = max(js_vals + q1_vals)
         tvals, ttext = indian_ticktexts(xmax)
 
         fig_dumb.update_layout(
             height=520,
-            margin=dict(l=10, r=10, t=30, b=10),
             xaxis=dict(title=metric_tab3, tickmode="array", tickvals=tvals, ticktext=ttext),
             yaxis=dict(title=""),
-            legend_title_text=""
+            legend_title_text="",
+            margin=dict(l=10, r=10, t=30, b=10)
         )
 
         st.plotly_chart(fig_dumb, use_container_width=True)
 
-        # ----------------------------
-        # C. DRILL-DOWN — Monthly Trend for Selected State (Jul→Oct)
-        # ----------------------------
-        if not top5_growth.empty:
-            default_state = top5_growth.iloc[0]["State Name"]
-        elif not shown_states.empty:
-            default_state = shown_states.iloc[0]["State Name"]
-        else:
-            default_state = None
+        # ============================================================
+    # C. DRILL-DOWN — MULTI-LINE TRENDS FOR GROWTH & LAGGARD STATES
+    # ============================================================
 
-        if default_state is None:
-            st.info("No state available for drill-down trend.")
-        else:
-            st.subheader("Drill-down: Monthly Trend (Jul→Oct)")
-            state_choice = st.selectbox(
-                "Pick a state",
-                options=sorted(df3["State Name"].dropna().unique().tolist()),
-                index=sorted(df3["State Name"].dropna().unique().tolist()).index(default_state)
-                if default_state in df3["State Name"].values else 0
-            )
+    st.subheader("Drill-down Trends (Jul → Oct)")
 
-            # Monthly series for chosen state (Jul–Oct)
-            s_df = df3[(df3["State Name"] == state_choice) & (df3["MonthKey"].isin(JUL_OCT_SET))].copy()
-            s_line = (
-                s_df.groupby(["MonthNum","MonthLabel"], as_index=False)[metric_tab3]
+    MONTH_SET_JO = {"jul", "aug", "sep", "oct"}
+    month_order_drill = ["Jul", "Aug", "Sep", "Oct"]
+
+    # ------------------------------------------
+    # 1️⃣ DRILL-DOWN FOR TOP GROWTH STATES
+    # ------------------------------------------
+    if top5_growth.empty:
+        st.info("No growth states available for drill-down based on current filters.")
+    else:
+        st.markdown("### Top Growth States — Multi-line Trend (Jul → Oct)")
+
+        growth_state_options = sorted(top5_growth["State Name"].tolist())
+        selected_growth_states = st.multiselect(
+            "Select Growth States to Display",
+            growth_state_options,
+            default=growth_state_options,
+            key="growth_drilldown_states"
+        )
+
+        if selected_growth_states:
+            g_df = df3[
+                (df3["State Name"].isin(selected_growth_states)) &
+                (df3["MonthKey"].isin(MONTH_SET_JO))
+            ].copy()
+
+            g_timeline = (
+                g_df.groupby(["State Name", "MonthNum", "MonthLabel"], as_index=False)[metric_tab3]
                 .sum()
                 .sort_values("MonthNum")
             )
-            s_line["MonthLabel"] = pd.Categorical(s_line["MonthLabel"], month_order_jo, ordered=True)
 
-            fig_trend = px.line(
-                s_line,
+            g_timeline["MonthLabel"] = pd.Categorical(
+                g_timeline["MonthLabel"], month_order_drill, ordered=True
+            )
+
+            fig_growth_drill = px.line(
+                g_timeline,
                 x="MonthLabel",
                 y=metric_tab3,
+                color="State Name",
                 markers=True
             )
-            # Add the state's Q1 average as benchmark hline
-            s_q1 = growth_df.set_index("State Name").get("Q1_avg")
-            s_q1_val = float(s_q1.get(state_choice, np.nan)) if s_q1 is not None else np.nan
-            if not np.isnan(s_q1_val):
-                fig_trend.add_hline(
-                    y=s_q1_val,
-                    line_dash="dot",
-                    line_color="#9e9e9e",
-                    annotation_text=f"Q1 Avg: {format_indian(s_q1_val)}",
-                    annotation_position="top left",
-                    annotation_font=dict(size=11, color="#616161")
-                )
 
-            ymax_tr = float(s_line[metric_tab3].max()) if not s_line.empty else 0.0
-            tv_tr, tt_tr = indian_ticktexts(ymax_tr)
-            fig_trend.update_layout(
-                yaxis=dict(tickmode="array", tickvals=tv_tr, ticktext=tt_tr, title=metric_tab3),
-                xaxis_title="Month",
+            ymax_g = g_timeline[metric_tab3].max()
+            tvg, ttg = indian_ticktexts(ymax_g)
+
+            fig_growth_drill.update_layout(
+                yaxis=dict(tickmode="array", tickvals=tvg, ticktext=ttg),
                 height=420,
                 margin=dict(l=10, r=10, t=40, b=10)
             )
-            fig_trend.update_traces(hovertemplate="Month=%{x}<br>"+metric_tab3+"=%{y:.0f}<extra></extra>")
-            st.plotly_chart(fig_trend, use_container_width=True)
+
+            st.plotly_chart(fig_growth_drill, use_container_width=True)
+
+        else:
+            st.info("Select at least one growth state to view the graph.")
+
+    # ------------------------------------------
+    # 2️⃣ DRILL-DOWN FOR LAGGARD STATES
+    # ------------------------------------------
+    if top_laggards.empty:
+        st.info("No laggard states available for drill-down based on current filters.")
+    else:
+        st.markdown("### Top Laggard States — Multi-line Trend (Jul → Oct)")
+
+        laggard_state_options = sorted(top_laggards["State Name"].tolist())
+        selected_laggard_states = st.multiselect(
+            "Select Laggard States to Display",
+            laggard_state_options,
+            default=laggard_state_options,
+            key="laggard_drilldown_states"
+        )
+
+        if selected_laggard_states:
+            l_df = df3[
+                (df3["State Name"].isin(selected_laggard_states)) &
+                (df3["MonthKey"].isin(MONTH_SET_JO))
+            ].copy()
+
+            l_timeline = (
+                l_df.groupby(["State Name", "MonthNum", "MonthLabel"], as_index=False)[metric_tab3]
+                .sum()
+                .sort_values("MonthNum")
+            )
+
+            l_timeline["MonthLabel"] = pd.Categorical(
+                l_timeline["MonthLabel"], month_order_drill, ordered=True
+            )
+
+            fig_laggard_drill = px.line(
+                l_timeline,
+                x="MonthLabel",
+                y=metric_tab3,
+                color="State Name",
+                markers=True
+            )
+
+            ymax_l = l_timeline[metric_tab3].max()
+            tvl, ttl = indian_ticktexts(ymax_l)
+
+            fig_laggard_drill.update_layout(
+                yaxis=dict(tickmode="array", tickvals=tvl, ticktext=ttl),
+                height=420,
+                margin=dict(l=10, r=10, t=40, b=10)
+            )
+
+            st.plotly_chart(fig_laggard_drill, use_container_width=True)
+
+        else:
+            st.info("Select at least one laggard state to view the graph.")
 
 # ============================================================
 # TAB 4 — METRO INDUSTRY VIEW (Grouped Bar: Industry vs GO DESi)
@@ -838,7 +1114,7 @@ with tab4:
     # TAB 4 FILTERS
     # ----------------------------
     with st.sidebar:
-        st.header("Tab 4 Filters")
+        st.header("Industry Size Filters")
 
         cat4 = st.multiselect(
             "Primary Category (Tab 4)",
@@ -969,3 +1245,70 @@ with tab4:
             .rename(columns={"MonthLabel": "Month"}),
         use_container_width=True
     )
+
+# ------------------------------
+# TAB 5 — P-Type Deep Dive
+# ------------------------------
+with tab5:
+    st.title("P-Type Deep Dive — Industry vs GO DESi")
+
+    # --------------------------
+    # GLOBAL FILTERS (SIDEBAR)
+    # --------------------------
+    with st.sidebar:
+        st.header("Deep Dive Filters")
+
+        platforms_tab5 = st.multiselect(
+            "Platform (Tab 5)",
+            sorted(pt_df["Platform"].dropna().unique().tolist()),
+            default=[],
+            key="platform_tab5_sidebar",
+        )
+
+        cities_tab5 = st.multiselect(
+            "City (Tab 5)",
+            sorted(pt_df["City"].dropna().unique().tolist()),
+            default=[],
+            key="city_tab5_sidebar",
+        )
+
+    # --------------------------
+    # SUBTABS: Sweets vs Candy
+    # --------------------------
+    sweets_tab, candy_tab = st.tabs(["Indian Sweets", "Candies & Gum"])
+
+    # ---------- Indian Sweets ----------
+    with sweets_tab:
+        st.subheader("Indian Sweets — P Type Trends")
+
+        sweets_ptypes = ["Barfi", "Katli", "Laddu", "Peda", "Chikki", "Gajak", "Mysore Pak"]
+
+        for ptype in sweets_ptypes:
+            with st.container():
+                st.markdown(f"### {ptype}")
+                render_ptype_section(
+                    pt_df,
+                    ptype=ptype,
+                    selected_platforms=platforms_tab5,
+                    selected_cities=cities_tab5,
+                    key_suffix="sweets",
+                )
+                st.markdown("---")
+
+    # ---------- Candies & Gum ----------
+    with candy_tab:
+        st.subheader("Candies & Gum — P Type Trends")
+
+        candy_ptypes = ["Candy", "Gum", "Mint"]
+
+        for ptype in candy_ptypes:
+            with st.container():
+                st.markdown(f"### {ptype}")
+                render_ptype_section(
+                    pt_df,
+                    ptype=ptype,
+                    selected_platforms=platforms_tab5,
+                    selected_cities=cities_tab5,
+                    key_suffix="candy",
+                )
+                st.markdown("---")
