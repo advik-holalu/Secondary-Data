@@ -218,28 +218,28 @@ def render_ptype_section(pt_df, ptype, selected_platforms, selected_cities, key_
     # -----------------------------
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-    # 🟦 Blue dotted line = GO DESI share %
-    fig.add_trace(
-        go.Scatter(
-            x=month_labels,
-            y=share_pct,
-            name="GO DESI Share (%)",
-            mode="lines+markers",
-            line=dict(dash="dot")
-        ),
-        secondary_y=False,
-    )
-
-    # 🔴 Red solid line = Industry Absolute Size (₹, in crores)
+    # 🔵 Blue solid line = Industry Absolute Size
     fig.add_trace(
         go.Scatter(
             x=month_labels,
             y=industry_crore,
             name="Industry Absolute Size (₹ crore)",
             mode="lines+markers",
-            line=dict(dash="solid")
+            line=dict(color="#1f77b4", dash="solid")   # Blue
         ),
         secondary_y=True,
+    )
+
+    # 🔴 Orange dotted line = GO DESI Share (%)
+    fig.add_trace(
+        go.Scatter(
+            x=month_labels,
+            y=share_pct,
+            name="GO DESI Share (%)",
+            mode="lines+markers",
+            line=dict(color="#FF7F32", dash="dot")    # Red dotted
+        ),
+        secondary_y=False,
     )
 
     # Layout
@@ -987,14 +987,14 @@ with tab3:
 
         st.plotly_chart(fig_dumb, use_container_width=True)
 
-        # ============================================================
+    # ============================================================
     # C. DRILL-DOWN — MULTI-LINE TRENDS FOR GROWTH & LAGGARD STATES
     # ============================================================
 
-    st.subheader("Drill-down Trends (Jul → Oct)")
+    st.subheader("Drill-down Trends (Apr → Oct)")
 
-    MONTH_SET_JO = {"jul", "aug", "sep", "oct"}
-    month_order_drill = ["Jul", "Aug", "Sep", "Oct"]
+    MONTH_SET_FULL = {"apr", "may", "jun", "jul", "aug", "sep", "oct"}
+    month_order_drill = ["Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"]
 
     # ------------------------------------------
     # 1️⃣ DRILL-DOWN FOR TOP GROWTH STATES
@@ -1002,7 +1002,7 @@ with tab3:
     if top5_growth.empty:
         st.info("No growth states available for drill-down based on current filters.")
     else:
-        st.markdown("### Top Growth States — Multi-line Trend (Jul → Oct)")
+        st.markdown("### Top Growth States — Multi-line Trend (Apr → Oct)")
 
         growth_state_options = sorted(top5_growth["State Name"].tolist())
         selected_growth_states = st.multiselect(
@@ -1015,7 +1015,7 @@ with tab3:
         if selected_growth_states:
             g_df = df3[
                 (df3["State Name"].isin(selected_growth_states)) &
-                (df3["MonthKey"].isin(MONTH_SET_JO))
+                (df3["MonthKey"].isin(MONTH_SET_FULL))
             ].copy()
 
             g_timeline = (
@@ -1056,7 +1056,7 @@ with tab3:
     if top_laggards.empty:
         st.info("No laggard states available for drill-down based on current filters.")
     else:
-        st.markdown("### Top Laggard States — Multi-line Trend (Jul → Oct)")
+        st.markdown("### Top Laggard States — Multi-line Trend (Apr → Oct)")
 
         laggard_state_options = sorted(top_laggards["State Name"].tolist())
         selected_laggard_states = st.multiselect(
@@ -1069,7 +1069,7 @@ with tab3:
         if selected_laggard_states:
             l_df = df3[
                 (df3["State Name"].isin(selected_laggard_states)) &
-                (df3["MonthKey"].isin(MONTH_SET_JO))
+                (df3["MonthKey"].isin(MONTH_SET_FULL))
             ].copy()
 
             l_timeline = (
@@ -1103,6 +1103,7 @@ with tab3:
 
         else:
             st.info("Select at least one laggard state to view the graph.")
+
 
 # ============================================================
 # TAB 4 — METRO INDUSTRY VIEW (Grouped Bar: Industry vs GO DESi)
