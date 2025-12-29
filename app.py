@@ -14,7 +14,7 @@ st.set_page_config(page_title="Secondary Sales Dashboard", layout="wide")
 # LOAD DATA
 # ------------------------------------------------------------
 @st.cache_data(show_spinner=True)
-def load_data():
+def load_data(_v="v4"):
     # Load both parquet files
     df = pd.read_parquet("secondary_sales.parquet")
     df_ind = pd.read_parquet("industry_size.parquet")
@@ -63,7 +63,7 @@ except FileNotFoundError:
 # ------------------------------------------------------------
 @st.cache_data
 def load_ptype_data():
-    return pd.read_excel("BusinessOverview.xlsx", sheet_name="P Type")
+    return pd.read_parquet("ptype.parquet")
 
 pt_df = load_ptype_data()
 pt_df.columns = pt_df.columns.str.strip()
