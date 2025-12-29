@@ -1,45 +1,93 @@
 # merge_to_parquet.py
 import pandas as pd
 
-# ---------- CONFIG ----------
+# --------------------------------------------------
+# CONFIG
+# --------------------------------------------------
 SOURCE_FILE = "BusinessOverview.xlsx"
 TARGET_FILE = "secondary_sales.parquet"
-EXCLUDE_MONTHS = ["jan", "feb", "mar", "nov"]  # ignore these
-SHEETS = ["Amazon Secondary", "Blinkit Secondary", "Instamart Secondary", "Zepto Secondary"]
 
-# ---------- HELPERS ----------
+SHEETS = [
+    "Amazon Secondary",
+    "Blinkit Secondary",
+    "Instamart Secondary",
+    "Zepto Secondary"
+]
+
+# --------------------------------------------------
+# MONTH HELPERS
+# --------------------------------------------------
 MONTH_ORDER = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"]
+
 def normalize_month(val):
     if pd.isna(val):
         return None
-    s = str(val).strip().lower()[:3]
-    if s.startswith("sep"):
-        s = "sep"
+    s = str(val).strip().lower()
+    s = s[:3]   # jan, feb, mar...
+    if s == "sep":
+        return "sep"
     return s if s in MONTH_ORDER else None
 
-# ---------- MERGE ----------
+# --------------------------------------------------
+# MERGE LOGIC
+# --------------------------------------------------
 frames = []
 xls = pd.ExcelFile(SOURCE_FILE)
-for s in SHEETS:
-    if s not in xls.sheet_names:
-        print(f"⚠️ Sheet '{s}' not found, skipping.")
+
+for sheet in SHEETS:
+    if sheet not in xls.sheet_names:
+        print(f"⚠️ Sheet '{sheet}' not found, skipping.")
         continue
-    df = pd.read_excel(xls, sheet_name=s)
-    keep = ["Item Name","City Name","State Name","Region Name","Qty Sold","Cat 1",
-            "Month","Year","Day","Revenue","GMV","Platform","Primary Cat"]
-    df = df[[c for c in keep if c in df.columns]].copy()
-    df["Platform"] = s.replace(" Secondary","")
+
+    df = pd.read_excel(xls, sheet_name=sheet)
+
+    # Keep only required columns if present
+    keep_cols = [
+        "Item Name",
+        "City Name",
+        "State Name",
+        "Region Name",
+        "Qty Sold",
+        "Cat 1",
+        "Month",
+        "Year",
+        "Day",
+        "Revenue",
+        "GMV",
+        "Platform",
+        "Primary Cat"
+    ]
+
+    df = df[[c for c in keep_cols if c in df.columns]].copy()
+
+    # Platform from sheet name (single source of truth)
+    df["Platform"] = sheet.replace(" Secondary", "").strip()
+
+    # Normalize month
     df["MonthKey"] = df["Month"].apply(normalize_month)
-    df = df[~df["MonthKey"].isna()]
-    df["MonthNum"] = df["MonthKey"].apply(lambda m: MONTH_ORDER.index(m)+1)
-    df = df[~df["MonthKey"].isin(EXCLUDE_MONTHS)]
+
+    # Drop rows with invalid month
+    df = df.dropna(subset=["MonthKey"])
+
+    # Month number (1–12)
+    df["MonthNum"] = df["MonthKey"].apply(lambda m: MONTH_ORDER.index(m) + 1)
+
     frames.append(df)
 
+# --------------------------------------------------
+# FINALIZE
+# --------------------------------------------------
 if not frames:
-    raise ValueError("No valid sheets found!")
+    raise ValueError("❌ No valid sheets found in Excel!")
 
-merged = pd.concat(frames, ignore_index=True)
-merged = merged.sort_values(by=["Year","MonthNum"]).reset_index(drop=True)
+merged = (
+    pd.concat(frames, ignore_index=True)
+    .sort_values(["Year", "MonthNum"])
+    .reset_index(drop=True)
+)
+
+# --------------------------------------------------
+# SAVE
+# --------------------------------------------------
 merged.to_parquet(TARGET_FILE, index=False)
-
-print(f"✅ Saved merged parquet file '{TARGET_FILE}' with shape {merged.shape}")
+print(f"✅ Saved merged parquet → {TARGET_FILE} | rows={len(merged)}")
